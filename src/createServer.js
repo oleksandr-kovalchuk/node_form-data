@@ -1,56 +1,109 @@
 'use strict';
 
 const http = require('http');
-const fs = require('fs').promises;
+const fs = require('fs');
+const querystring = require('querystring');
 
 function createServer() {
-  const server = http.createServer(async (req, res) => {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+  const server = http.createServer((req, res) => {
+    const { method, url } = req;
 
-    if (parsedUrl.pathname !== '/add-expense') {
-      res.statusCode = 404;
-
-      return res.end('Bad request');
+    if (url === '/' && method === 'GET') {
+      serveHTML(res);
+    } else if (url === '/add-expense' && method === 'POST') {
+      handleExpenseSubmission(req, res);
+    } else {
+      respondWithError(res, 404, 'Invalid URL');
     }
+  });
 
-    let requestBody = '';
-
-    for await (const chunk of req) {
-      requestBody += chunk;
-    }
-
-    let expenseData;
-
-    try {
-      expenseData = JSON.parse(requestBody);
-    } catch (error) {
-      res.statusCode = 400;
-
-      return res.end(`${error.message} error`);
-    }
-
-    const { date, title, amount } = expenseData;
-
-    if (!date || !title || !amount) {
-      res.statusCode = 404;
-
-      return res.end('No data received');
-    }
-
-    try {
-      await fs.writeFile('./db/expense.json', requestBody);
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(requestBody);
-    } catch (error) {
-      res.statusCode = 500;
-      res.end('error saving data');
-    }
+  server.on('error', (error) => {
+    // eslint-disable-next-line no-console
+    console.error('Server error:', error);
   });
 
   return server;
 }
 
-module.exports = {
-  createServer,
-};
+function serveHTML(res) {
+  const htmlContent = `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Form Data</title>
+      </head>
+      <body>
+        <h1>Form Data</h1>
+        <form action="/add-expense" method="post">
+          <label>Date</label>
+          <input type="date" name="date" required />
+          <br />
+          <label>Title</label>
+          <input type="text" name="title" required />
+          <br />
+          <label>Amount</label>
+          <input type="number" name="amount" required />
+          <br />
+          <button type="submit">Submit</button>
+        </form>
+      </body>
+    </html>
+  `;
+
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(htmlContent);
+}
+
+function handleExpenseSubmission(req, res) {
+  let body = '';
+
+  req.setEncoding('utf8');
+
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  req.on('end', () => {
+    const expense = parseExpenseData(body);
+
+    if (!expense.date || !expense.title || !expense.amount) {
+      return respondWithError(res, 400, 'Missing required fields');
+    }
+
+    fs.writeFile(
+      './db/expense.json',
+      JSON.stringify(expense, null, 2),
+      (err) => {
+        if (err) {
+          return respondWithError(res, 500, 'Server Error');
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(expense, null, 2));
+      },
+    );
+  });
+}
+
+function parseExpenseData(body) {
+  const formData = querystring.parse(body);
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    return {
+      date: formData.date,
+      title: formData.title,
+      amount: formData.amount,
+    };
+  }
+}
+
+function respondWithError(res, statusCode, message) {
+  res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+  res.end(message);
+}
+
+module.exports = { createServer };
