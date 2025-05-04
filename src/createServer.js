@@ -1,109 +1,70 @@
 'use strict';
 
 const http = require('http');
-const fs = require('fs');
-const querystring = require('querystring');
+const fs = require('fs/promises');
+const path = require('path');
+const { text: getRequestBodyAsText } = require('stream/consumers');
 
 function createServer() {
-  const server = http.createServer((req, res) => {
-    const { method, url } = req;
+  return http.createServer(async (request, response) => {
+    const { method, url: requestUrl } = request;
 
-    if (url === '/' && method === 'GET') {
-      serveHTML(res);
-    } else if (url === '/add-expense' && method === 'POST') {
-      handleExpenseSubmission(req, res);
-    } else {
-      respondWithError(res, 404, 'Invalid URL');
-    }
-  });
+    if (requestUrl === '/' && method === 'GET') {
+      await serveHtmlPage(response);
 
-  server.on('error', (error) => {
-    // eslint-disable-next-line no-console
-    console.error('Server error:', error);
-  });
-
-  return server;
-}
-
-function serveHTML(res) {
-  const htmlContent = `
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Form Data</title>
-      </head>
-      <body>
-        <h1>Form Data</h1>
-        <form action="/add-expense" method="post">
-          <label>Date</label>
-          <input type="date" name="date" required />
-          <br />
-          <label>Title</label>
-          <input type="text" name="title" required />
-          <br />
-          <label>Amount</label>
-          <input type="number" name="amount" required />
-          <br />
-          <button type="submit">Submit</button>
-        </form>
-      </body>
-    </html>
-  `;
-
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(htmlContent);
-}
-
-function handleExpenseSubmission(req, res) {
-  let body = '';
-
-  req.setEncoding('utf8');
-
-  req.on('data', (chunk) => {
-    body += chunk;
-  });
-
-  req.on('end', () => {
-    const expense = parseExpenseData(body);
-
-    if (!expense.date || !expense.title || !expense.amount) {
-      return respondWithError(res, 400, 'Missing required fields');
+      return;
     }
 
-    fs.writeFile(
-      './db/expense.json',
-      JSON.stringify(expense, null, 2),
-      (err) => {
-        if (err) {
-          return respondWithError(res, 500, 'Server Error');
-        }
+    if (requestUrl === '/add-expense' && method === 'POST') {
+      await processExpenseSubmission(request, response);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(expense, null, 2));
-      },
-    );
+      return;
+    }
+
+    sendErrorResponse(response, 404, 'Invalid URL');
   });
 }
 
-function parseExpenseData(body) {
-  const formData = querystring.parse(body);
+async function serveHtmlPage(response) {
+  const htmlFilePath = path.join(__dirname, 'public', 'index.html');
 
   try {
-    return JSON.parse(body);
-  } catch {
-    return {
-      date: formData.date,
-      title: formData.title,
-      amount: formData.amount,
-    };
+    const htmlContent = await fs.readFile(htmlFilePath, 'utf8');
+
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(htmlContent);
+  } catch (error) {
+    sendErrorResponse(response, 500, 'Error loading HTML');
   }
 }
 
-function respondWithError(res, statusCode, message) {
-  res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
-  res.end(message);
+async function processExpenseSubmission(request, response) {
+  try {
+    const requestBody = await getRequestBodyAsText(request);
+    const expenseData = JSON.parse(requestBody);
+
+    const { date, title, amount } = expenseData;
+
+    if (!date || !title || !amount) {
+      sendErrorResponse(response, 400, 'Missing required fields');
+
+      return;
+    }
+
+    const expenseFilePath = path.join(__dirname, '..', 'db', 'expense.json');
+
+    await fs.writeFile(expenseFilePath, JSON.stringify(expenseData), 'utf8');
+
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(expenseData));
+  } catch (error) {
+    sendErrorResponse(response, 500, 'Server Error');
+  }
+}
+
+function sendErrorResponse(response, statusCode, message) {
+  response.writeHead(statusCode, { 'Content-Type': 'text/plain' });
+  response.end(message);
 }
 
 module.exports = { createServer };
